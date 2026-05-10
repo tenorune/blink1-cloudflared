@@ -15,7 +15,8 @@
 # busy keep-alive connection still produces visible flashes.
 #
 # Requirements:
-#   - blink1-tool on PATH (brew install blink1-tool)
+#   - blink1-tool on PATH (brew install blink1 — the formula is named "blink1"
+#     but ships the blink1-tool CLI from github.com/todbot/blink1-tool)
 #   - cloudflared running with metrics enabled, e.g. in ~/.cloudflared/config.yml:
 #         metrics: localhost:20241
 #     or on the CLI: cloudflared tunnel --metrics localhost:20241 run <name>
@@ -42,7 +43,7 @@ COLOR_OFF="0,0,0"
 
 BLINK1_TOOL="${BLINK1_TOOL:-$(command -v blink1-tool 2>/dev/null || true)}"
 if [[ -z "$BLINK1_TOOL" || ! -x "$BLINK1_TOOL" ]]; then
-  echo "blink1-tool not found. Install with: brew install blink1-tool" >&2
+  echo "blink1-tool not found. Install with: brew install blink1" >&2
   echo "Or set BLINK1_TOOL=/path/to/blink1-tool" >&2
   exit 1
 fi
