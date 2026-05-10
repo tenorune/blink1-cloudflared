@@ -29,6 +29,16 @@
 
 set -uo pipefail
 
+# Load .env from the script's directory if present. Existing environment
+# variables win, so `FOO=bar ./blink1-cloudflared.sh` still overrides .env.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$script_dir/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$script_dir/.env"
+  set +a
+fi
+
 METRICS_URL="${METRICS_URL:-http://localhost:20241/metrics}"
 POLL_INTERVAL="${POLL_INTERVAL:-1}"
 SSH_PORT="${SSH_PORT:-22}"
