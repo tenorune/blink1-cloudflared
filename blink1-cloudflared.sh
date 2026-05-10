@@ -77,17 +77,25 @@ get_request_count() {
     | awk '/^cloudflared_tunnel_total_requests[ {]/ {sum += $NF} END {print sum+0}'
 }
 
+# Detect an SSH session opened through the tunnel by looking for an
+# ESTABLISHED TCP connection on the loopback interface where one end is
+# the local sshd port. cloudflared (running as root via launchd) opens a
+# loopback connection to 127.0.0.1:22 for each tunneled SSH session, and
+# netstat sees it without sudo. This intentionally ignores remote SSH
+# connections from the LAN, since those don't terminate on loopback.
 has_ssh_connection() {
-  local pids pid
-  pids=$(pgrep -x cloudflared 2>/dev/null || true)
-  [[ -z "$pids" ]] && return 1
-  for pid in $pids; do
-    if lsof -nP -p "$pid" -a -iTCP:"$SSH_PORT" -sTCP:ESTABLISHED 2>/dev/null \
-        | grep -q .; then
-      return 0
-    fi
-  done
-  return 1
+  netstat -an -p tcp 2>/dev/null | awk -v port="$SSH_PORT" '
+    $NF == "ESTABLISHED" {
+      local = $4; foreign = $5
+      local_loop  = (local  ~ /^127\./ || local  ~ /^::1\./)
+      foreign_loop = (foreign ~ /^127\./ || foreign ~ /^::1\./)
+      port_re = "\\." port "$"
+      if (local_loop && foreign_loop && (local ~ port_re || foreign ~ port_re)) {
+        found = 1
+      }
+    }
+    END { exit !found }
+  '
 }
 
 sleep_ms() {
