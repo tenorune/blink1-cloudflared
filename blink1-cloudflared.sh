@@ -4,8 +4,11 @@
 #
 # States (lowest to highest priority):
 #   1. Tunnel healthy           -> solid dim blue
-#   2. SSH session active       -> solid amber (overrides healthy)
-#   3. HTTP request just served -> brief green flash (overrides both)
+#   2. Vite dev server up       -> solid teal-green (overrides healthy)
+#   3. SSH session active       -> solid amber (overrides healthy/vite)
+#   3b. SSH + Vite both active  -> alternates SSH and Vite every ALTERNATE_S
+#                                  with a hardware fade between them
+#   4. HTTP request just served -> brief green flash (overrides everything)
 #   *. Metrics unreachable      -> dim red
 #
 # "SSH active" = cloudflared has an ESTABLISHED TCP connection to local sshd
@@ -42,12 +45,16 @@ fi
 METRICS_URL="${METRICS_URL:-http://localhost:20241/metrics}"
 POLL_INTERVAL="${POLL_INTERVAL:-1}"
 SSH_PORT="${SSH_PORT:-22}"
+VITE_PORT="${VITE_PORT:-4173}"
 HTTP_FLASH_MS="${HTTP_FLASH_MS:-180}"
+ALTERNATE_S="${ALTERNATE_S:-3}"     # seconds per color when SSH+Vite both active
+FADE_MS="${FADE_MS:-500}"           # blink1 hardware fade duration during alternation
 
 # Colors as R,G,B (0-255). Tweak to taste.
 COLOR_HEALTHY="${COLOR_HEALTHY:-0,0,40}"      # dim blue
-COLOR_SSH="${COLOR_SSH:-90,40,0}"             # amber
-COLOR_HTTP="${COLOR_HTTP:-0,255,0}"           # bright green
+COLOR_SSH="${COLOR_SSH:-255,165,0}"           # amber
+COLOR_VITE="${COLOR_VITE:-0,200,120}"         # teal-green
+COLOR_HTTP="${COLOR_HTTP:-0,255,0}"           # bright pure green
 COLOR_DOWN="${COLOR_DOWN:-40,0,0}"            # dim red
 COLOR_OFF="0,0,0"
 
@@ -60,6 +67,11 @@ fi
 
 set_color() {
   "$BLINK1_TOOL" --rgb "$1" -q >/dev/null 2>&1 || true
+}
+
+# Set color with a hardware fade over MILLIS milliseconds.
+set_color_fade() {
+  "$BLINK1_TOOL" --rgb "$1" -m "$2" -q >/dev/null 2>&1 || true
 }
 
 cleanup() {
@@ -98,6 +110,15 @@ has_ssh_connection() {
   '
 }
 
+# Detect a process listening on VITE_PORT (e.g. `vite preview` on 4173).
+# netstat shows LISTEN sockets without sudo regardless of owner.
+vite_listening() {
+  netstat -an -p tcp 2>/dev/null | awk -v port="$VITE_PORT" '
+    $NF == "LISTEN" && $4 ~ ("\\." port "$") { found = 1 }
+    END { exit !found }
+  '
+}
+
 sleep_ms() {
   awk -v ms="$1" 'BEGIN { system("sleep " ms/1000) }'
 }
@@ -122,8 +143,23 @@ while true; do
     continue
   fi
 
-  if has_ssh_connection; then
+  ssh_active=0; vite_active=0
+  has_ssh_connection && ssh_active=1
+  vite_listening && vite_active=1
+
+  fade_this_frame=0
+  if (( ssh_active && vite_active )); then
+    # Alternate every ALTERNATE_S seconds based on wall-clock time bucket.
+    if (( ($(date +%s) / ALTERNATE_S) % 2 == 0 )); then
+      base_color="$COLOR_SSH"
+    else
+      base_color="$COLOR_VITE"
+    fi
+    fade_this_frame=1
+  elif (( ssh_active )); then
     base_color="$COLOR_SSH"
+  elif (( vite_active )); then
+    base_color="$COLOR_VITE"
   else
     base_color="$COLOR_HEALTHY"
   fi
@@ -134,7 +170,13 @@ while true; do
     current_color=""  # force re-apply of base after the flash
   fi
 
-  apply_color "$base_color"
+  if (( fade_this_frame )) && [[ "$base_color" != "$current_color" ]]; then
+    set_color_fade "$base_color" "$FADE_MS"
+    current_color="$base_color"
+  else
+    apply_color "$base_color"
+  fi
+
   prev_count="$count"
   sleep "$POLL_INTERVAL"
 done
