@@ -13,8 +13,9 @@
 #   *. No edge connections      -> off (cloudflared is up but can't reach
 #                                  the Cloudflare edge)
 #   *. No internet (TCP probe)  -> blink red every ~3s (LAN up, internet down)
-#   *. No default route         -> pulse red every ~1s (Wi-Fi off / fully
-#                                  disconnected) — overrides all of the above
+#   *. No physical interface    -> pulse red every ~1s (no en* reachable
+#                                  in scutil --nwi; VPN utun* ignored on
+#                                  purpose) — overrides all of the above
 #
 # "SSH active" = cloudflared has an ESTABLISHED TCP connection to local sshd
 # (i.e. the tunnel is configured with `service: ssh://localhost:22`).
@@ -108,10 +109,20 @@ sum_metric() {
     | awk -v name="$2" '$0 ~ ("^" name "[ {]") {sum += $NF} END {print sum+0}'
 }
 
-# True if the system has a default IPv4 route. Goes false immediately when
-# Wi-Fi is turned off or all interfaces lose their default route.
+# True if macOS has a physical-style network interface (Wi-Fi / Ethernet /
+# USB-C dongle — all show up as en0, en1, ...) listed as reachable in
+# scutil --nwi. Virtual interfaces (utun, ipsec, ppp, tap, ...) deliberately
+# don't count: a VPN tunnel can stay "reachable" via a local endpoint even
+# after Wi-Fi is turned off, which is exactly the bug we're avoiding.
 has_default_route() {
-  route get default >/dev/null 2>&1
+  scutil --nwi 2>/dev/null | awk '
+    /^Network interfaces:/ {
+      for (i = 3; i <= NF; i++) {
+        if ($i ~ /^en[0-9]+$/) found = 1
+      }
+    }
+    END { exit !found }
+  '
 }
 
 # True if we can open a TCP connection to PROBE_HOST:PROBE_PORT within
@@ -167,7 +178,8 @@ prev_count=""
 echo "Watching $METRICS_URL (Ctrl-C to stop)"
 
 while true; do
-  # No default route — fully disconnected. Pulse red ~1s/cycle.
+  # No physical interface reachable (e.g. Wi-Fi off, even with a VPN
+  # tunnel still up). Pulse red ~1s/cycle.
   if ! has_default_route; then
     set_color_fade "$COLOR_DOWN" "$PULSE_FADE_MS"
     sleep_ms "$PULSE_FADE_MS"
