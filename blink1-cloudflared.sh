@@ -10,6 +10,8 @@
 #                                  with a hardware fade between them
 #   4. HTTP request just served -> brief green flash (overrides everything)
 #   *. Metrics unreachable      -> dim red
+#   *. No edge connections      -> off (cloudflared is up but can't reach
+#                                  the Cloudflare edge, e.g. no network)
 #
 # "SSH active" = cloudflared has an ESTABLISHED TCP connection to local sshd
 # (i.e. the tunnel is configured with `service: ssh://localhost:22`).
@@ -80,13 +82,16 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-# Sum cloudflared_tunnel_total_requests across all label sets. Returns
-# nonzero (and empty stdout) if the metrics endpoint is unreachable.
-get_request_count() {
-  local body
-  body=$(curl -fsS --max-time 2 "$METRICS_URL" 2>/dev/null) || return 1
-  printf '%s\n' "$body" \
-    | awk '/^cloudflared_tunnel_total_requests[ {]/ {sum += $NF} END {print sum+0}'
+# Fetch the cloudflared metrics body once. Returns nonzero if unreachable.
+fetch_metrics() {
+  curl -fsS --max-time 2 "$METRICS_URL" 2>/dev/null
+}
+
+# Sum a Prometheus metric across all label sets in a metrics body.
+#   $1 = metrics body, $2 = metric name
+sum_metric() {
+  printf '%s\n' "$1" \
+    | awk -v name="$2" '$0 ~ ("^" name "[ {]") {sum += $NF} END {print sum+0}'
 }
 
 # Detect an SSH session opened through the tunnel by looking for an
@@ -136,9 +141,22 @@ prev_count=""
 echo "Watching $METRICS_URL (Ctrl-C to stop)"
 
 while true; do
-  if ! count=$(get_request_count) || [[ -z "$count" ]]; then
+  if ! body=$(fetch_metrics); then
     apply_color "$COLOR_DOWN"
     prev_count=""
+    sleep "$POLL_INTERVAL"
+    continue
+  fi
+
+  ha_connections=$(sum_metric "$body" cloudflared_tunnel_ha_connections)
+  count=$(sum_metric "$body" cloudflared_tunnel_total_requests)
+
+  # cloudflared is up locally but has no active connections to the
+  # Cloudflare edge — no traffic can flow, so treat as offline and
+  # turn the LED off regardless of local Vite/SSH state.
+  if (( ha_connections == 0 )); then
+    apply_color "$COLOR_OFF"
+    prev_count="$count"
     sleep "$POLL_INTERVAL"
     continue
   fi
