@@ -16,6 +16,7 @@ HTTP requests are being served — without staring at logs or `lsof`.
 | 3b       | SSH **and** Vite both up    | alternates 3 ↔ 2        | hardware fade between amber and teal-green every `ALTERNATE_S`s   |
 | 4        | HTTP request just served    | bright green (`0,255,0`)| `cloudflared_tunnel_total_requests` counter advanced              |
 | —        | Metrics unreachable         | dim red (`40,0,0`)      | `curl` failed                                                     |
+| —        | No edge connections         | off                     | `cloudflared_tunnel_ha_connections` is `0` (e.g. no network)      |
 
 The HTTP flash overrides any base color, then the script returns to whatever
 the base state is. Higher priority wins; the alternation only happens when SSH
@@ -89,6 +90,10 @@ COLOR_HEALTHY=0,0,255 ./blink1-cloudflared.sh
 - **Vite detection** is a generic LISTEN check on `VITE_PORT` — anything
   bound to that port will trigger it. Set `VITE_PORT` to whatever your build
   actually serves on (Vite's `preview` defaults to 4173, `dev` to 5173).
+- **Network detection** uses `cloudflared_tunnel_ha_connections`. If
+  cloudflared is running but has no active connections to the Cloudflare edge
+  (no internet, edge outage, tunnel misconfigured), the LED turns off rather
+  than showing a misleading "healthy" / Vite / SSH color.
 - If the LED looks dark, the dim defaults may be too dim for ambient light.
   Bump `COLOR_HEALTHY` and `COLOR_DOWN` higher in `.env`.
 
