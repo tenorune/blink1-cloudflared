@@ -18,7 +18,7 @@ HTTP requests are being served — without staring at logs or `lsof`.
 | —        | Metrics unreachable         | dim red (`40,0,0`)      | `curl` failed                                                     |
 | —        | No edge connections         | off                     | `cloudflared_tunnel_ha_connections` is `0`                        |
 | —        | LAN up, no internet         | red blink every ~3s     | TCP probe to `PROBE_HOST:PROBE_PORT` fails                        |
-| —        | No active interface         | red pulse every ~1s     | `scutil --nwi` reports `No active interfaces` (e.g. Wi-Fi off)    |
+| —        | No physical network         | red pulse every ~1s     | `scutil --nwi` has no `en*` (Wi-Fi/Ethernet) interface reachable  |
 
 The HTTP flash overrides any base color, then the script returns to whatever
 the base state is. Higher priority wins; the alternation only happens when SSH
@@ -99,10 +99,12 @@ COLOR_HEALTHY=0,0,255 ./blink1-cloudflared.sh
   bound to that port will trigger it. Set `VITE_PORT` to whatever your build
   actually serves on (Vite's `preview` defaults to 4173, `dev` to 5173).
 - **Network detection** has three layers, checked in this order each poll:
-  1. `scutil --nwi` — if configd reports `No active interfaces` (e.g. Wi-Fi
-     off), the LED pulses red on a ~1s cycle. `route get default` was
-     tried first but it's unreliable on macOS — VPN, Docker, or stale
-     entries keep it returning success after Wi-Fi drops.
+  1. `scutil --nwi` — if no `en*` (Wi-Fi / Ethernet / USB-C) interface is
+     reachable, the LED pulses red on a ~1s cycle. Virtual interfaces
+     (`utun`, `ipsec`, `ppp`, ...) are deliberately ignored so an active
+     VPN tunnel doesn't mask a Wi-Fi outage. `route get default` was
+     tried first but it's unreliable on macOS — it stays "up" via VPN
+     and stale entries after Wi-Fi drops.
   2. TCP connect to `PROBE_HOST:PROBE_PORT` (default `1.1.1.1:443`) with a
      `PROBE_TIMEOUT`-second timeout — if that fails, the LAN is up but the
      internet isn't, and the LED blinks red every ~3s.
