@@ -11,7 +11,10 @@
 #   4. HTTP request just served -> brief green flash (overrides everything)
 #   *. Metrics unreachable      -> dim red
 #   *. No edge connections      -> off (cloudflared is up but can't reach
-#                                  the Cloudflare edge, e.g. no network)
+#                                  the Cloudflare edge)
+#   *. No internet (TCP probe)  -> blink red every ~3s (LAN up, internet down)
+#   *. No default route         -> pulse red every ~1s (Wi-Fi off / fully
+#                                  disconnected) — overrides all of the above
 #
 # "SSH active" = cloudflared has an ESTABLISHED TCP connection to local sshd
 # (i.e. the tunnel is configured with `service: ssh://localhost:22`).
@@ -51,6 +54,17 @@ VITE_PORT="${VITE_PORT:-4173}"
 HTTP_FLASH_MS="${HTTP_FLASH_MS:-180}"
 ALTERNATE_S="${ALTERNATE_S:-3}"     # seconds per color when SSH+Vite both active
 FADE_MS="${FADE_MS:-500}"           # blink1 hardware fade duration during alternation
+
+# Internet reachability probe. Used to detect "no network" faster than
+# cloudflared's own metrics (which can lag 30s+ behind the actual network).
+PROBE_HOST="${PROBE_HOST:-1.1.1.1}"
+PROBE_PORT="${PROBE_PORT:-443}"
+PROBE_TIMEOUT="${PROBE_TIMEOUT:-1}"  # seconds for the TCP connect timeout
+
+# Animation timing for offline states.
+PULSE_FADE_MS="${PULSE_FADE_MS:-500}"   # half a 1s pulse cycle
+BLINK_ON_MS="${BLINK_ON_MS:-200}"       # flash duration in the 3s blink cycle
+BLINK_OFF_MS="${BLINK_OFF_MS:-2800}"    # dark gap in the 3s blink cycle
 
 # Colors as R,G,B (0-255). Tweak to taste.
 COLOR_HEALTHY="${COLOR_HEALTHY:-0,0,40}"      # dim blue
@@ -92,6 +106,18 @@ fetch_metrics() {
 sum_metric() {
   printf '%s\n' "$1" \
     | awk -v name="$2" '$0 ~ ("^" name "[ {]") {sum += $NF} END {print sum+0}'
+}
+
+# True if the system has a default IPv4 route. Goes false immediately when
+# Wi-Fi is turned off or all interfaces lose their default route.
+has_default_route() {
+  route get default >/dev/null 2>&1
+}
+
+# True if we can open a TCP connection to PROBE_HOST:PROBE_PORT within
+# PROBE_TIMEOUT seconds. Uses BSD nc (-G is connect timeout in seconds).
+internet_reachable() {
+  nc -z -G "$PROBE_TIMEOUT" "$PROBE_HOST" "$PROBE_PORT" >/dev/null 2>&1
 }
 
 # Detect an SSH session opened through the tunnel by looking for an
@@ -141,6 +167,28 @@ prev_count=""
 echo "Watching $METRICS_URL (Ctrl-C to stop)"
 
 while true; do
+  # No default route — fully disconnected. Pulse red ~1s/cycle.
+  if ! has_default_route; then
+    set_color_fade "$COLOR_DOWN" "$PULSE_FADE_MS"
+    sleep_ms "$PULSE_FADE_MS"
+    set_color_fade "$COLOR_OFF" "$PULSE_FADE_MS"
+    sleep_ms "$PULSE_FADE_MS"
+    current_color=""
+    prev_count=""
+    continue
+  fi
+
+  # Route exists but the wider internet is unreachable — blink red every ~3s.
+  if ! internet_reachable; then
+    set_color "$COLOR_DOWN"
+    sleep_ms "$BLINK_ON_MS"
+    set_color "$COLOR_OFF"
+    sleep_ms "$BLINK_OFF_MS"
+    current_color=""
+    prev_count=""
+    continue
+  fi
+
   if ! body=$(fetch_metrics); then
     apply_color "$COLOR_DOWN"
     prev_count=""
