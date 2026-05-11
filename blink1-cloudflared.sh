@@ -13,7 +13,7 @@
 #   *. No edge connections      -> off (cloudflared is up but can't reach
 #                                  the Cloudflare edge)
 #   *. No internet (TCP probe)  -> blink red every ~3s (LAN up, internet down)
-#   *. No default route         -> pulse red every ~1s (Wi-Fi off / fully
+#   *. No active interface      -> pulse red every ~1s (Wi-Fi off / fully
 #                                  disconnected) — overrides all of the above
 #
 # "SSH active" = cloudflared has an ESTABLISHED TCP connection to local sshd
@@ -108,10 +108,14 @@ sum_metric() {
     | awk -v name="$2" '$0 ~ ("^" name "[ {]") {sum += $NF} END {print sum+0}'
 }
 
-# True if the system has a default IPv4 route. Goes false immediately when
-# Wi-Fi is turned off or all interfaces lose their default route.
+# True if macOS has any reachable network interface. Uses scutil --nwi
+# (the Network Information service that backs SCNetworkReachability), which
+# prints "No active interfaces" only when configd considers the machine
+# fully offline. This is more reliable than `route get default`, which can
+# return success via stale entries or VPN/utun/bridge interfaces even
+# moments after Wi-Fi is turned off.
 has_default_route() {
-  route get default >/dev/null 2>&1
+  ! scutil --nwi 2>/dev/null | grep -q "No active interfaces"
 }
 
 # True if we can open a TCP connection to PROBE_HOST:PROBE_PORT within
@@ -167,7 +171,7 @@ prev_count=""
 echo "Watching $METRICS_URL (Ctrl-C to stop)"
 
 while true; do
-  # No default route — fully disconnected. Pulse red ~1s/cycle.
+  # No active interface — fully disconnected. Pulse red ~1s/cycle.
   if ! has_default_route; then
     set_color_fade "$COLOR_DOWN" "$PULSE_FADE_MS"
     sleep_ms "$PULSE_FADE_MS"
