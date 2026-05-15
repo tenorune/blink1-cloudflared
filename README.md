@@ -87,11 +87,17 @@ COLOR_HEALTHY=0,0,255 ./blink1-cloudflared.sh
 
 ## Notes
 
-- **SSH detection** matches any ESTABLISHED loopback TCP connection touching
-  `SSH_PORT`. cloudflared (running as root via launchd) opens a `127.0.0.1:22`
-  connection to local sshd for each tunneled SSH session, which `netstat -an`
-  sees without sudo. Remote SSH from your LAN doesn't trigger it because those
-  connections aren't loopback.
+- **SSH detection** matches any ESTABLISHED TCP connection with the local
+  side on `SSH_PORT`. That covers:
+  - hostname ingress (`service: ssh://localhost:22`), which shows as a
+    `127.0.0.1 <-> 127.0.0.1:22` loopback pair,
+  - cloudflared CIDR / private-network routes, where cloudflared delivers
+    packets on the Mac's own LAN IP so both ends look like `192.168.x.y:*`,
+  - SSH from another machine on the LAN.
+
+  Earlier versions filtered to loopback only, which missed CIDR routes. If
+  you'd rather only count tunneled sessions, restrict by source range on
+  your own (e.g. via firewall) — the script no longer tries to.
 - **HTTP** is detected per-request via the cloudflared metrics counter, so
   bursts of requests on a single keep-alive connection still produce visible
   flashes.
