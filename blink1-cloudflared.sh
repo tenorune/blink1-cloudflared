@@ -131,23 +131,18 @@ internet_reachable() {
   nc -z -G "$PROBE_TIMEOUT" "$PROBE_HOST" "$PROBE_PORT" >/dev/null 2>&1
 }
 
-# Detect an SSH session opened through the tunnel by looking for an
-# ESTABLISHED TCP connection on the loopback interface where one end is
-# the local sshd port. cloudflared (running as root via launchd) opens a
-# loopback connection to 127.0.0.1:22 for each tunneled SSH session, and
-# netstat sees it without sudo. This intentionally ignores remote SSH
-# connections from the LAN, since those don't terminate on loopback.
+# Detect any ESTABLISHED SSH session terminating on this Mac, regardless
+# of how it arrived. This covers:
+#   - cloudflared hostname ingress (service: ssh://localhost:22), which
+#     opens a 127.0.0.1 -> 127.0.0.1:22 loopback pair
+#   - cloudflared CIDR / private-network routes, which deliver packets on
+#     the Mac's own LAN IP, so both ends look like 192.168.x.y:*
+#   - SSH from another machine on the LAN
+# We match on the local side ending in SSH_PORT, which works for all of
+# the above.
 has_ssh_connection() {
   netstat -an -p tcp 2>/dev/null | awk -v port="$SSH_PORT" '
-    $NF == "ESTABLISHED" {
-      local = $4; foreign = $5
-      local_loop  = (local  ~ /^127\./ || local  ~ /^::1\./)
-      foreign_loop = (foreign ~ /^127\./ || foreign ~ /^::1\./)
-      port_re = "\\." port "$"
-      if (local_loop && foreign_loop && (local ~ port_re || foreign ~ port_re)) {
-        found = 1
-      }
-    }
+    $NF == "ESTABLISHED" && $4 ~ ("\\." port "$") { found = 1 }
     END { exit !found }
   '
 }
